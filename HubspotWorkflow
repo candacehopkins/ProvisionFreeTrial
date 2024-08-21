@@ -1,0 +1,156 @@
+import requests
+import os
+
+TARGET = {"platform": "producttour.anvilogic.com"}
+
+def anvilogic_api_query(session, method, endpoint, params, data):
+    api_scheme = 'https'
+    platform = TARGET['platform']
+
+    base_url = api_scheme + "://" + platform
+    headers = {'Content-type': 'application/json'}
+
+    try:
+        r = session.request(method=method, url=base_url + endpoint, params=params, json=data)
+    except Exception as e: 
+        print("Request error: " + e)
+
+    return r.json()
+
+def resendInvite(user_session, email):
+  data = {"email":email}
+  try:
+    r = anvilogic_api_query(session=user_session, method="POST", endpoint='/api/provision/resendInvitation', params=None, data=data)
+    if r['status'] == 200:
+      return r['message']
+    else:
+      return None
+  except Exception as e:
+      print("resent invite error: {}".format(str(e)))
+
+
+  
+def get_users(user_session):
+  try: 
+    r = anvilogic_api_query(session=user_session, method="GET", endpoint='/api/provision/getUsers', params=None, data=None)
+    #print("Searching For User Id: {}".format(user_id))
+    return r['infos']
+
+  except Exception as e:
+    print("Error Getting List Of Users: " + str(e))
+    return None
+      
+def find_users(user_email,avl_user_list):
+    if user_email != "":
+      try:
+        userId = None
+        status = None
+        for user in avl_user_list:
+          # {"infos": [{"userId": 140, ..
+          # this has to be an integer comparison!
+          if user['email'] == user_email:
+            userId = user['userId']
+            print("Found User {}:{}".format(userId,user_email))
+            return userId, user['status'] 
+
+          # Return the output data that can be used in later actions in your workflow.
+        print("Unable to find userid for email {}".format(user_email))
+        return userId, status
+      except Exception as e:
+        print("User search error: " + str(e))
+        userId = None
+        return userId, status
+    else:
+      # user id was a blank string
+      print("Invalid or blank user_id passed to function")
+      userId = None
+      return userId, status
+
+
+def anvilogic_login(target):
+
+    api_scheme = 'https'
+    platform = TARGET['platform']
+
+    base_url = api_scheme + "://" + platform
+    headers = {'Content-type': 'application/json'}
+
+    s = requests.Session()
+    password = os.environ.get('SupportAcctPasswordFeb2024')
+    data = {"username": "support.anvilogictestdrive.com@anvilogic.com", "password": password}
+    print("About to make Login request...")
+    login_request = s.post(
+            base_url + '/api/authentication/login', json=data, headers=headers)
+    if login_request.status_code == 200:
+        print("Login request successful")
+        s.headers.update(
+                {"X-Api-Key": login_request.json()["accessToken"]})
+    else:
+        print(login_request.text)
+
+    return s
+
+def main(event):
+  # Use inputs to get data from any action in your workflow and use it in your code instead of having to use the HubSpot API.
+    print(event)
+    userData = {"firstName": event["inputFields"]["firstname"],"middleName":"","lastName": event["inputFields"]["lastname"],"email": event["inputFields"]["email"],"roles":["content_developer"],"baseURL":"https://producttour.anvilogic.com"}
+    
+    user_session = anvilogic_login(TARGET)
+    
+    try: 
+        #print(userData)
+        r = anvilogic_api_query(session=user_session, method="POST", endpoint='/api/provision/createUser', params=None, data=userData)
+        print(r)
+
+    except Exception as e:
+        print("User creation error: " + str(e))
+        r = -1
+    # case where the user already exists will return a 409
+    if r['status'] == 409:
+      try:
+        user_list = get_users(user_session)
+        user_id, user_status = find_users(event["inputFields"]["email"],user_list)
+        if user_id is not None:
+          r = user_id
+          # case where user registered previously and has an account but
+		  # never finished signup
+          if user_status == "invitation_sent":
+           # Return the output data that can be used in later actions in your workflow.
+          	print(resendInvite(user_session,event["inputFields"]["email"]))
+          	return { "outputFields": {"userid": r, "formemail" : event["inputFields"]["email"], "userstatus": user_status }}
+          if user_status == "enabled":
+            return { "outputFields": {"userid": r, "formemail" : event["inputFields"]["email"], "userstatus": user_status }}
+        elif user_id == None:
+           return {
+            "outputFields": {"userid": -1, "formemail" : event["inputFields"]["email"]}
+           }
+    
+
+      except Exception as e:
+        print("Failed to get a list of users: " + str(e))
+        r = -1
+		# Return the output data that can be used in later actions in your workflow.
+        return {
+            "outputFields": {"userid": r, "formemail" : event["inputFields"]["email"]}
+            }
+    
+    
+    else:
+      try:
+        user_list = get_users(user_session)
+        user_id, user_status = find_users(event["inputFields"]["email"],user_list)
+        if user_id is not None:
+          r = user_id
+          return {
+          "outputFields": {"userid": r , "formemail" : event["inputFields"]["email"], "userstatus": user_status }
+          }
+        else:
+          return {
+          "outputFields": {"userid": -1 , "formemail": event["inputFields"]["email"] }
+          }
+
+      except Exception as e:
+        print("Failed to get a list of users: " + str(e))
+        return {
+          "outputFields": {"userid": -1 , "formemail": event["inputFields"]["email"] }
+          }
